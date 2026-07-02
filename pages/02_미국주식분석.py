@@ -122,6 +122,13 @@ if show_ma:
 show_rsi = st.sidebar.checkbox("RSI 보조지표 표시", value=False)
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("🎨 차트 스타일")
+chart_type = st.sidebar.radio("차트 종류", ["캔들스틱", "라인", "OHLC 바"], horizontal=False)
+chart_theme = st.sidebar.radio("테마", ["라이트", "다크"], horizontal=True)
+show_drawtools = st.sidebar.checkbox("추세선 그리기 도구 표시", value=True,
+                                      help="차트 위에서 직접 추세선, 사각형 등을 그려볼 수 있는 도구 모음을 상단에 표시해요.")
+
+st.sidebar.markdown("---")
 compare_index = st.sidebar.checkbox("주요 지수(ETF)와 비교", value=False)
 if compare_index:
     index_choice = st.sidebar.selectbox("비교할 지수", list(INDEX_MAP.keys()))
@@ -206,10 +213,15 @@ def calc_rsi(series, window=14):
     return 100 - (100 / (1 + rs))
 
 # ----------------------------------------
-# 차트 (캔들 + 거래량 + RSI)
+# 차트 (캔들/라인/OHLC + 거래량 + RSI)
 # ----------------------------------------
+template = "plotly_dark" if chart_theme == "다크" else "plotly_white"
+up_color = "#26a69a"
+down_color = "#ef5350"
+
+# 행 구성: RSI 표시 여부에 따라 2단 또는 3단
 n_rows = 3 if show_rsi else 2
-row_heights = [0.6, 0.2, 0.2] if show_rsi else [0.7, 0.3]
+row_heights = [0.62, 0.18, 0.20] if show_rsi else [0.72, 0.28]
 
 fig = make_subplots(
     rows=n_rows, cols=1, shared_xaxes=True,
@@ -217,44 +229,131 @@ fig = make_subplots(
     row_heights=row_heights,
 )
 
-fig.add_trace(go.Candlestick(
-    x=df["Date"], open=df["Open"], high=df["High"],
-    low=df["Low"], close=df["Close"], name="주가",
-    increasing_line_color="#2ecc71", decreasing_line_color="#e74c3c",
-), row=1, col=1)
+# ---- 메인 가격 차트 (선택한 차트 종류에 따라 트레이스 변경) ----
+if chart_type == "캔들스틱":
+    fig.add_trace(go.Candlestick(
+        x=df["Date"], open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"], name="주가",
+        increasing_line_color=up_color, decreasing_line_color=down_color,
+        increasing_fillcolor=up_color, decreasing_fillcolor=down_color,
+        whiskerwidth=0.4,
+    ), row=1, col=1)
+elif chart_type == "OHLC 바":
+    fig.add_trace(go.Ohlc(
+        x=df["Date"], open=df["Open"], high=df["High"],
+        low=df["Low"], close=df["Close"], name="주가",
+        increasing_line_color=up_color, decreasing_line_color=down_color,
+    ), row=1, col=1)
+else:  # 라인차트
+    fig.add_trace(go.Scatter(
+        x=df["Date"], y=df["Close"], mode="lines", name="종가",
+        line=dict(color="#3498db", width=2),
+        fill="tozeroy", fillcolor="rgba(52,152,219,0.08)",
+        hovertemplate="종가: $%{y:,.2f}<extra></extra>",
+    ), row=1, col=1)
 
-colors = ["#3498db", "#f39c12", "#9b59b6", "#e74c3c", "#1abc9c"]
+# ---- 이동평균선 ----
+ma_colors = ["#f39c12", "#9b59b6", "#e74c3c", "#1abc9c", "#3498db"]
 if show_ma:
     for i, p in enumerate(ma_periods):
         ma_series = df["Close"].rolling(window=p).mean()
         fig.add_trace(go.Scatter(
             x=df["Date"], y=ma_series, mode="lines",
-            name=f"{p}일 이동평균", line=dict(width=1.5, color=colors[i % len(colors)])
+            name=f"{p}일 이동평균", line=dict(width=1.4, color=ma_colors[i % len(ma_colors)]),
+            hovertemplate=f"{p}일 이평: " + "$%{y:,.2f}<extra></extra>",
         ), row=1, col=1)
 
-vol_colors = ["#2ecc71" if c >= o else "#e74c3c" for o, c in zip(df["Open"], df["Close"])]
+# ---- 현재가 기준선 ----
+fig.add_hline(
+    y=last_close, line_dash="dot", line_color="gray", line_width=1,
+    annotation_text=f"현재가 ${last_close:,.2f}", annotation_position="top left",
+    row=1, col=1,
+)
+
+# ---- 캔들스틱 hover 커스텀 (시가/고가/저가/종가를 한글 라벨로) ----
+if chart_type in ("캔들스틱", "OHLC 바"):
+    fig.update_traces(
+        selector=dict(type="candlestick" if chart_type == "캔들스틱" else "ohlc"),
+        hovertext=[
+            f"시가: ${o:,.2f}<br>고가: ${h:,.2f}<br>저가: ${l:,.2f}<br>종가: ${c:,.2f}"
+            for o, h, l, c in zip(df["Open"], df["High"], df["Low"], df["Close"])
+        ],
+    )
+
+# ---- 거래량 ----
+vol_colors = [up_color if c >= o else down_color for o, c in zip(df["Open"], df["Close"])]
 fig.add_trace(go.Bar(
-    x=df["Date"], y=df["Volume"], name="거래량", marker_color=vol_colors
+    x=df["Date"], y=df["Volume"], name="거래량", marker_color=vol_colors,
+    hovertemplate="거래량: %{y:,.0f}<extra></extra>",
 ), row=2, col=1)
 
+# ---- RSI ----
 if show_rsi:
     rsi = calc_rsi(df["Close"])
-    fig.add_trace(go.Scatter(x=df["Date"], y=rsi, mode="lines", name="RSI", line=dict(color="#8e44ad")), row=3, col=1)
-    fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="blue", row=3, col=1)
+    fig.add_trace(go.Scatter(
+        x=df["Date"], y=rsi, mode="lines", name="RSI",
+        line=dict(color="#8e44ad", width=1.5),
+        hovertemplate="RSI: %{y:.1f}<extra></extra>",
+    ), row=3, col=1)
+    fig.add_hrect(y0=70, y1=100, line_width=0, fillcolor="red", opacity=0.06, row=3, col=1)
+    fig.add_hrect(y0=0, y1=30, line_width=0, fillcolor="blue", opacity=0.06, row=3, col=1)
+    fig.add_hline(y=70, line_dash="dash", line_color="red", line_width=1, row=3, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="blue", line_width=1, row=3, col=1)
+
+# ---- 구간 선택 버튼 (1M/3M/6M/YTD/1Y/전체) ----
+fig.update_xaxes(
+    rangeselector=dict(
+        buttons=list([
+            dict(count=1, label="1개월", step="month", stepmode="backward"),
+            dict(count=3, label="3개월", step="month", stepmode="backward"),
+            dict(count=6, label="6개월", step="month", stepmode="backward"),
+            dict(count=1, label="YTD", step="year", stepmode="todate"),
+            dict(count=1, label="1년", step="year", stepmode="backward"),
+            dict(step="all", label="전체"),
+        ]),
+        bgcolor="rgba(150,150,150,0.15)",
+        activecolor="#3498db",
+        font=dict(size=11),
+    ),
+    row=1, col=1,
+)
+
+# ---- 크로스헤어(스파이크 라인)로 값 정확히 짚어보기 ----
+fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor",
+                  spikedash="dot", spikethickness=1, spikecolor="gray")
+fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor",
+                  spikedash="dot", spikethickness=1, spikecolor="gray")
+
+# 마지막 행에만 컴팩트한 레인지슬라이더 표시 (드래그로 구간 빠르게 이동)
+fig.update_xaxes(rangeslider=dict(visible=False))
+fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.05), row=n_rows, col=1)
 
 fig.update_layout(
-    height=750,
-    xaxis_rangeslider_visible=False,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=10, r=10, t=30, b=10),
+    template=template,
+    height=780,
+    hovermode="x unified",
+    dragmode="zoom",
+    legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="right", x=1),
+    margin=dict(l=10, r=10, t=60, b=10),
+    hoverlabel=dict(bgcolor="rgba(30,30,30,0.85)", font_color="white", font_size=12),
 )
 fig.update_yaxes(title_text="가격 (USD)", row=1, col=1)
 fig.update_yaxes(title_text="거래량", row=2, col=1)
 if show_rsi:
-    fig.update_yaxes(title_text="RSI", row=3, col=1)
+    fig.update_yaxes(title_text="RSI", row=3, col=1, range=[0, 100])
 
-st.plotly_chart(fig, use_container_width=True)
+# ---- 모드바에 그리기 도구(추세선/사각형 등) 추가 ----
+plot_config = {
+    "scrollZoom": True,
+    "displaylogo": False,
+}
+if show_drawtools:
+    plot_config["modeBarButtonsToAdd"] = [
+        "drawline", "drawopenpath", "drawrect", "drawcircle", "eraseshape",
+    ]
+
+st.plotly_chart(fig, use_container_width=True, config=plot_config)
+st.caption("💡 차트 위를 드래그하면 확대, 더블클릭하면 원래대로 돌아와요. 우측 상단 도구모음에서 추세선을 직접 그려볼 수도 있어요.")
 
 # ----------------------------------------
 # 지수 비교 (선택 시)
