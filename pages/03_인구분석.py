@@ -23,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATA_PATH = "data/202606_202606_연령별인구현황_월간.csv"
+DATA_PATH = "202606_202606_연령별인구현황_월간.csv"
 BASE_YEAR, BASE_MONTH = 2026, 6  # 데이터 기준 시점
 
 # 국가 전체 합계출산율·출생아수 추이 (통계청·국가데이터처 발표 기준, 2025년은 잠정치)
